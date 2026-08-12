@@ -2,29 +2,23 @@ from ortools.constraint_solver import routing_enums_pb2
 from ortools.constraint_solver import pywrapcp
 
 def solve_gvrp(data):
-    depot = data["depot"]
-    depot_start = data.get("depot_start", data["time_windows"][depot][0])
+    starts = data["starts"]
+    ends = data["ends"]
+    num_depots = data["num_depots"]
+    time_windows = data["time_windows"]
 
-    relative_time_windows = []
-    for start, end in data["time_windows"]:
-        relative_start = max(0, start - depot_start)
-        relative_end = max(0, end - depot_start)
-        relative_time_windows.append((relative_start, relative_end))
-
-    depot_end_relative = max(0, data["time_windows"][depot][1] - depot_start)
-    relative_time_windows[depot] = (0, depot_end_relative)
-
+    # 1. Inisialisasi Manager untuk MULTI-DEPOT
     manager = pywrapcp.RoutingIndexManager(
         len(data["distance_matrix"]),
         data["num_vehicles"],
-        depot
+        starts,
+        ends
     )
 
     routing = pywrapcp.RoutingModel(manager)
 
     # =====================================================================
-    # GREEN HEURISTIC: DEMAND-GRAVITY COST MATRIX
-    # Mengubah paradigma pencarian dari 'Shortest Path' ke 'Lowest Emission'
+    # MULTI-DEPOT GREEN HEURISTIC (DEMAND-GRAVITY)
     # =====================================================================
     cost_matrix = []
     max_cap = max(data["vehicle_capacities"]) if data["vehicle_capacities"] else 1
@@ -34,7 +28,8 @@ def solve_gvrp(data):
         for j in range(len(data["distance_matrix"])):
             dist = data["distance_matrix"][i][j]
             
-            if i == depot and j != depot:
+            # Jika berangkat dari SALAH SATU DEPOT menuju LOKASI PENGIRIMAN
+            if i < num_depots and j >= num_depots:
                 demand_ratio = data["demands"][j] / max_cap
                 gravity_discount = 1.0 - (0.45 * demand_ratio)
                 row.append(int(dist * gravity_discount))
@@ -74,30 +69,32 @@ def solve_gvrp(data):
         return travel_time + service_time
 
     time_callback_index = routing.RegisterTransitCallback(time_callback)
-    max_time_horizon = max(end for _, end in relative_time_windows)
-
+    
+    # Maksimal horizon waktu adalah hari (1440 menit)
     routing.AddDimension(
         time_callback_index,
         120,                
-        max_time_horizon,   
+        1440,   
         False,
         "Time"
     )
-
     time_dimension = routing.GetDimensionOrDie("Time")
 
-    for location_idx, time_window in enumerate(relative_time_windows):
+    # Batasan Jendela Waktu (Absolut) untuk semua lokasi pengiriman
+    for location_idx, time_window in enumerate(time_windows):
         index = manager.NodeToIndex(location_idx)
         time_dimension.CumulVar(index).SetRange(time_window[0], time_window[1])
 
-    depot_time_window = relative_time_windows[depot]
-
+    # Batasan Jendela Waktu (Absolut) untuk kendaraan (mengikuti jam operasional Depot masing-masing)
     for vehicle_id in range(data["num_vehicles"]):
         start_index = routing.Start(vehicle_id)
         end_index = routing.End(vehicle_id)
+        
+        depot_idx = starts[vehicle_id]
+        tw = time_windows[depot_idx]
 
-        time_dimension.CumulVar(start_index).SetRange(depot_time_window[0], depot_time_window[1])
-        time_dimension.CumulVar(end_index).SetRange(depot_time_window[0], depot_time_window[1])
+        time_dimension.CumulVar(start_index).SetRange(tw[0], tw[1])
+        time_dimension.CumulVar(end_index).SetRange(tw[0], tw[1])
 
         routing.AddVariableMinimizedByFinalizer(time_dimension.CumulVar(start_index))
         routing.AddVariableMinimizedByFinalizer(time_dimension.CumulVar(end_index))
@@ -125,6 +122,7 @@ def solve_gvrp(data):
         route_distance = 0
         route_load = 0
         
+        # Lakukan pre-looping untuk mendapatkan total beban awal di depot
         temp_index = index
         while not routing.IsEnd(temp_index):
             node_idx = manager.IndexToNode(temp_index)
@@ -150,29 +148,27 @@ def solve_gvrp(data):
             route_nodes.append(data["address_list"][node_index])
             route_node_indices.append(node_index)
 
-            absolute_arrival = arrival_time + depot_start
-            absolute_deadline = data["time_windows"][node_index][1]
+            absolute_deadline = time_windows[node_index][1]
 
             route_schedule.append({
                 "Location": data["address_list"][node_index],
-                "Time": f"{absolute_arrival // 60:02d}:{absolute_arrival % 60:02d}",
+                "Time": f"{arrival_time // 60:02d}:{arrival_time % 60:02d}",
                 "Arrival_Minutes": arrival_time,
                 "Deadline_Minutes": absolute_deadline,
                 "Demand": demand_at_node,
                 "Current Load": current_vehicle_load, 
                 "Latitude": data["raw_coords"][node_index][0],
                 "Longitude": data["raw_coords"][node_index][1],
-                "Stop Type": "Depot" if node_index == depot else "Delivery"
+                "Stop Type": "Depot" if node_index < num_depots else "Delivery"
             })
 
-            if node_index != depot:
+            if node_index >= num_depots:
                 latest_actual_arrival = max(latest_actual_arrival, arrival_time)
-                latest_allowed_relative = relative_time_windows[node_index][1]
-                lateness = max(0, arrival_time - latest_allowed_relative)
+                lateness = max(0, arrival_time - absolute_deadline)
 
                 temporary_stop_results.append({
                     "Location": data["address_list"][node_index],
-                    "Arrival Time": f"{absolute_arrival // 60:02d}:{absolute_arrival % 60:02d}",
+                    "Arrival Time": f"{arrival_time // 60:02d}:{arrival_time % 60:02d}",
                     "Deadline": f"{absolute_deadline // 60:02d}:{absolute_deadline % 60:02d}",
                     "Demand": demand_at_node,
                     "On-Time Status": "On time" if lateness == 0 else "Late",
@@ -197,16 +193,15 @@ def solve_gvrp(data):
 
         end_node = manager.IndexToNode(index)
         end_time = solution.Min(time_dimension.CumulVar(index))
-        absolute_end_time = end_time + depot_start
 
         route_nodes.append(data["address_list"][end_node])
         route_node_indices.append(end_node)
 
         route_schedule.append({
             "Location": data["address_list"][end_node],
-            "Time": f"{absolute_end_time // 60:02d}:{absolute_end_time % 60:02d}",
+            "Time": f"{end_time // 60:02d}:{end_time % 60:02d}",
             "Arrival_Minutes": end_time,
-            "Deadline_Minutes": data["time_windows"][end_node][1],
+            "Deadline_Minutes": time_windows[end_node][1],
             "Demand": int(data["demands"][end_node]),
             "Current Load": 0,
             "Latitude": data["raw_coords"][end_node][0],
@@ -225,26 +220,26 @@ def solve_gvrp(data):
                 
             distance_km = route_distance / 1000
             
-            # 3. Kalkulasi Bahan Bakar dalam Satuan Liter & Biaya Riil
             route_fuel_liters = route_co2_emission / data["fuel_co2_per_liter"]
             fuel_cost = route_fuel_liters * data["fuel_cost_per_liter"]
             driver_cost = data["driver_cost_per_vehicle"]
             total_cost = fuel_cost + driver_cost
             
+            depot_name = data["address_list"][starts[vehicle_id]]
+            
             route_results.append({
+                "Vehicle": display_vehicle_id,
+                "Depot Assigned": depot_name,
                 "Fuel Consumed (L)": round(route_fuel_liters, 2),
                 "Fuel Cost": round(fuel_cost, 2),
                 "Driver Cost": round(driver_cost, 2),
                 "Total Cost": round(total_cost, 2),
-                "Vehicle": display_vehicle_id,
-                "Original Vehicle ID": vehicle_id + 1,
                 "Route": " -> ".join(route_nodes),
                 "Distance (km)": round(distance_km, 2),
                 "Total Payload (kg)": route_load,
                 "Utilization (%)": round((route_load / max_capacity) * 100, 2),
                 "CO2 Emissions (kg)": round(route_co2_emission, 3), 
-                "Exposure Time (mins)": end_time,
-                "Return Time": f"{absolute_end_time // 60:02d}:{absolute_end_time % 60:02d}",
+                "Return Time": f"{end_time // 60:02d}:{end_time % 60:02d}",
                 "Schedule": route_schedule,
                 "Node Indices": route_node_indices,
                 "Coordinates": [data["raw_coords"][i] for i in route_node_indices]
