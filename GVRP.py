@@ -7,7 +7,7 @@ import folium
 from folium.plugins import AntPath
 from streamlit_folium import st_folium
 
-# Pastikan nama file solver kamu adalah solver.py
+# Pastikan file solver kamu bernama solver.py
 from solver import solve_gvrp
 
 # -------------------------------
@@ -94,7 +94,8 @@ def create_enhanced_route_map(routes, default_lat=0.0, default_lon=0.0):
                     f"<b>{stop['Location']}</b><br>"
                     f"Operational Window: {tw_text}<br>"
                     f"Arrival Time: {stop.get('Time','N/A')}<br>"
-                    f"Demand: {stop.get('Demand',0)}<br>"
+                    f"Payload Dropped: {stop.get('Demand',0)} kg<br>"
+                    f"Current Load: {stop.get('Current Load',0)} kg<br>"
                     f"Vehicle Utilization: {route.get('Utilization (%)',0)}%<br>"
                     f"Distance: {route.get('Distance (km)',0)} km<br>"
                     f"Lateness: {stop.get('Lateness_Minutes', 0)} min"
@@ -104,7 +105,6 @@ def create_enhanced_route_map(routes, default_lat=0.0, default_lon=0.0):
     return combined_map
 
 def compute_vehicle_metrics(result, data):
-    # Hanya menghitung lateness karena utilization dan distance sudah dihitung di solver GVRP
     for route in result["route_results"]:
         schedule = route["Schedule"]
         if schedule:
@@ -146,15 +146,42 @@ st.sidebar.header("🚚 Fleet & Emission Parameters")
 fuel_cost_per_km = st.sidebar.number_input("Fuel Cost per KM (Rp)", 0, 50000, 1500)
 driver_cost_per_vehicle = st.sidebar.number_input("Driver Cost per Vehicle (Rp)", 0, 500000, 100000)
 num_vehicles = st.sidebar.number_input("Number of Vehicles", 1, 15, 2)
-vehicle_capacity = st.sidebar.number_input("Vehicle Capacity (kg/units)", 1, 50000, 100)
+vehicle_capacity = st.sidebar.number_input("Vehicle Max Capacity (kg)", 1, 50000, 1000, step=100)
 
 st.sidebar.header("🌱 GVRP Emission Factors")
-# Parameter emisi dinamis berdasarkan berat
-emission_empty = st.sidebar.number_input("Empty Vehicle Emission (kg CO2/km)", 0.0, 5.0, 0.15, step=0.01)
-emission_full = st.sidebar.number_input("Full Vehicle Emission (kg CO2/km)", 0.0, 5.0, 0.30, step=0.01)
+fuel_type = st.sidebar.selectbox(
+    "Fuel Type", 
+    ["Diesel (Solar)", "Gasoline (Bensin)"],
+    help="Diesel menghasilkan emisi karbon lebih padat per liternya dibandingkan bensin."
+)
+
+fuel_co2_per_liter = 2.68 if fuel_type == "Diesel (Solar)" else 2.31
+
+st.sidebar.markdown("**Fuel Economy (km/L)**")
+fe_empty = st.sidebar.number_input("Empty Vehicle (km/L)", 1.0, 50.0, 10.0, step=0.5, help="Konsumsi BBM saat kendaraan tidak membawa muatan.")
+fe_full = st.sidebar.number_input("Fully Loaded Vehicle (km/L)", 1.0, 50.0, 7.0, step=0.5, help="Konsumsi BBM saat kendaraan membawa muatan maksimal.")
+
+if fe_full > fe_empty:
+    st.sidebar.warning("⚠️ Kendaraan bermuatan penuh biasanya lebih boros (angka km/L lebih kecil) daripada saat kosong.")
+
+emission_empty = fuel_co2_per_liter / fe_empty if fe_empty > 0 else 0
+emission_full = fuel_co2_per_liter / fe_full if fe_full > 0 else 0
+
+st.sidebar.info(
+    f"💡 **Calculated Emissions:**\n"
+    f"- Empty: {emission_empty:.3f} kg CO2/km\n"
+    f"- Full: {emission_full:.3f} kg CO2/km"
+)
+
+st.sidebar.header("📦 Product Specifications")
+weight_per_unit = st.sidebar.number_input(
+    "Average Weight per Unit/Package (kg)", 
+    0.1, 1000.0, 5.0, step=0.1, 
+    help="Berat rata-rata untuk 1 unit barang. Ini akan dikalikan dengan demand tiap lokasi untuk mendapatkan total beban."
+)
 
 # -------------------------------
-# Dynamic Sidebar Location Controls (Manual vs Excel Layout)
+# Dynamic Sidebar Location Controls
 # -------------------------------
 st.sidebar.header("📦 Location Configurations")
 input_method = st.sidebar.radio("Data Entry Method", ["Manual Entry", "Excel Upload"])
@@ -176,7 +203,7 @@ if input_method == "Manual Entry":
             lon = col_lon.number_input("Longitude", value=0.0, format="%.6f", key=f"lon_{loc_id}")
             
             if loc_type == "delivery point":
-                demand_input = st.number_input("Demand", 0, 10000, 0, key=f"d_in_{loc_id}")
+                demand_input = st.number_input("Demand (Units)", 0, 10000, 0, key=f"d_in_{loc_id}")
             else:
                 demand_input = 0
                 st.caption("Depot load defaults to 0.")
@@ -208,7 +235,7 @@ else:
         "Location Type": ["depot", "delivery point"],
         "Latitude": [-6.603150, -6.335336],
         "Longitude": [106.762180, 106.680340],
-        "Demand": [0, 250],
+        "Demand": [0, 50],
         "Open Time": ["00:00", "08:00"],
         "Close Time": ["23:59", "20:00"]
     }
@@ -285,7 +312,11 @@ if st.button("🚀 Run Route Optimization"):
     if scenario == "Peak distribution day":
         multiplier = 1.25
 
-    final_demands = [math.ceil(loc["demand"] * multiplier) if idx != 0 else 0 for idx, loc in enumerate(sorted_locations)]
+    # KALKULASI BARU: Konversi Unit menjadi Kilogram
+    final_demands = [
+        math.ceil(loc["demand"] * multiplier * weight_per_unit) if idx != 0 else 0 
+        for idx, loc in enumerate(sorted_locations)
+    ]
 
     data = {
         "address_list": [loc["name"] for loc in sorted_locations],
@@ -344,17 +375,15 @@ if st.session_state.optimization_result:
     baseline_distance = round(total_unoptimized_meters / 1000, 2)
     optimized_distance = sum(r.get("Distance (km)", 0) for r in routes)
     
-    # Perhitungan Baseline CO2 (menggunakan rata-rata emisi atau emisi penuh)
     avg_emission = (data["emission_empty"] + data["emission_full"]) / 2
     baseline_emissions = baseline_distance * avg_emission
     
-    # Ambil total emisi hasil optimasi dinamis dari solver
     optimized_emissions = sum(r.get("CO2 Emissions (kg)", 0) for r in routes)
     emission_reduction = baseline_emissions - optimized_emissions
     
     col1, col2, col3, col4, col5, col6 = st.columns(6)
     total_operational_cost = sum(r.get("Total Cost", 0) for r in routes)
-    total_packages = sum(r.get('Delivered Packages', 0) for r in routes)
+    total_packages = sum(r.get('Total Payload (kg)', 0) for r in routes)
     total_capacity = sum(data['vehicle_capacities'])
     
     col1.metric("Baseline Dist.", f"{baseline_distance:.2f} km")
@@ -378,7 +407,7 @@ if st.session_state.optimization_result:
     vehicle_summary_df = pd.DataFrame(routes)[[
         "Vehicle",
         "Distance (km)",
-        "Delivered Packages",
+        "Total Payload (kg)",
         "Utilization (%)",
         "CO2 Emissions (kg)",
         "Fuel Cost",
@@ -391,7 +420,7 @@ if st.session_state.optimization_result:
 
     for route in routes:
         st.markdown(f"### Vehicle {route['Vehicle']}")
-        if route.get("Delivered Packages", 0) == 0 or not route.get("Schedule"):
+        if route.get("Total Payload (kg)", 0) == 0 or not route.get("Schedule"):
             st.info("Vehicle not needed for this configuration.")
             continue
 
@@ -407,13 +436,14 @@ if st.session_state.optimization_result:
                 "Location": s["Location"],
                 "Operational Window": f"{open_min//60:02d}:{open_min%60:02d} - {close_min//60:02d}:{close_min%60:02d}",
                 "Arrival Time": s["Time"],
-                "Demand": s["Demand"],
+                "Payload Dropped (kg)": s["Demand"],
+                "Current Load (kg)": s.get("Current Load", 0),
                 "Lateness (min)": s.get("Lateness_Minutes", 0),
                 "Latitude": s["Latitude"],
                 "Longitude": s["Longitude"]
             })
             
-        stop_df = pd.DataFrame(schedule_records)[["Location", "Operational Window", "Arrival Time", "Demand", "Lateness (min)", "Latitude", "Longitude"]]
+        stop_df = pd.DataFrame(schedule_records)[["Location", "Operational Window", "Arrival Time", "Payload Dropped (kg)", "Current Load (kg)", "Lateness (min)", "Latitude", "Longitude"]]
         
         st.markdown(f"#### Stop-Level Delivery Table (Vehicle {route['Vehicle']})")
         st.dataframe(stop_df, use_container_width=True)
@@ -435,9 +465,9 @@ st.markdown(
     <div style='text-align: center; color: #888888; font-size: 0.85rem; line-height: 1.6; padding: 10px 0;'>
         Property of Elementary Industrial Laboratory of industrial engineering<br>
         <span style='font-size: 0.8rem; color: #aaaaaa;'>
-            Made by: Daniel Delbert Ardielry, Zufar Fathan Hasdiono, Maulida Boru Butarbutar, Natanael Bayu Anggara
+            Made by: Daniel Delbert Ardielry, Primadhani Syahputera,
         </span>
     </div>
     """, 
     unsafe_allow_html=True
-            )
+)
