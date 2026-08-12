@@ -139,9 +139,6 @@ def parse_time_to_minutes(time_str):
 # -------------------------------
 # Sidebar inputs (Global parameters)
 # -------------------------------
-st.sidebar.header("⚙️ Operational Scenarios")
-scenario = st.sidebar.selectbox("Select Scenario", ["Normal distribution day", "Peak distribution day", "Delayed departure"])
-
 st.sidebar.header("🚚 Fleet & Emission Parameters")
 fuel_cost_per_km = st.sidebar.number_input("Fuel Cost per KM (Rp)", 0, 50000, 1500)
 driver_cost_per_vehicle = st.sidebar.number_input("Driver Cost per Vehicle (Rp)", 0, 500000, 100000)
@@ -309,12 +306,9 @@ if st.button("🚀 Run Route Optimization"):
         loc for idx, loc in enumerate(user_locations) if idx != primary_depot_idx
     ]
 
-    multiplier = 1.0
-    if scenario == "Peak distribution day":
-        multiplier = 1.25
-
+    # KALKULASI BARU: Hanya mengkonversi Unit menjadi Kilogram
     final_demands = [
-        math.ceil(loc["demand"] * multiplier * weight_per_unit) if idx != 0 else 0 
+        math.ceil(loc["demand"] * weight_per_unit) if idx != 0 else 0 
         for idx, loc in enumerate(sorted_locations)
     ]
 
