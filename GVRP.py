@@ -7,6 +7,7 @@ import folium
 from folium.plugins import AntPath
 from streamlit_folium import st_folium
 
+# Pastikan file solver kamu bernama solver.py
 from solver import solve_gvrp
 
 # -------------------------------
@@ -24,7 +25,7 @@ if "num_locations" not in st.session_state:
 st.set_page_config(page_title="Distribution Route Optimization System", layout="wide", page_icon="🌱")
 
 # --- HEADER ---
-st.title("🌱 Green Route Optimization (GVRP)")
+st.title("🌱 Multi-Depot Green Route Optimization (MDGVRP)")
 
 # -------------------------------
 # OSRM helpers
@@ -260,6 +261,16 @@ else:
                     "demand": dem,
                     "time_window": (start_min, end_min)
                 })
+            
+            # Dinamis Sukses Message 
+            num_depots = len(depot_indices)
+            num_deliveries = len(user_locations) - num_depots
+            
+            depot_str = f"{num_depots} depot{'s' if num_depots > 1 else ''}"
+            loc_str = f"{num_deliveries} location{'s' if num_deliveries > 1 else ''}"
+            
+            st.sidebar.success(f"✅ {depot_str} and {loc_str} confirmed!")
+
         except Exception as e:
             st.sidebar.error(f"Error parsing file: {e}")
 
@@ -274,15 +285,12 @@ if st.button("🚀 Run MDGVRP Optimization"):
         st.error("Please configure at least one location as 'depot'.")
         st.stop()
 
-    # MULTI-DEPOT LOGIC: Pisahkan semua depot untuk diletakkan di indeks teratas
     depot_locations = [user_locations[i] for i in depot_indices]
     delivery_locations = [loc for i, loc in enumerate(user_locations) if i not in depot_indices]
     
-    # Gabungkan kembali: Array kini berisi (Depot1, Depot2, ..., Deliv1, Deliv2, ...)
     sorted_locations = depot_locations + delivery_locations
     num_depots = len(depot_locations)
 
-    # Distribusikan kendaraan ke depot secara adil (Round-Robin)
     starts = [i % num_depots for i in range(num_vehicles)]
     ends = [i % num_depots for i in range(num_vehicles)]
 
@@ -298,8 +306,8 @@ if st.button("🚀 Run MDGVRP Optimization"):
         "vehicle_capacities": [vehicle_capacity] * num_vehicles,
         "num_vehicles": num_vehicles,
         "num_depots": num_depots,
-        "starts": starts, # <-- Menggantikan single "depot"
-        "ends": ends,     # <-- Menggantikan single "depot"
+        "starts": starts, 
+        "ends": ends,     
         "time_windows": [loc["time_window"] for loc in sorted_locations], 
         "service_times": [0 if idx < num_depots else 5 for idx in range(len(sorted_locations))], 
         "fuel_cost_per_liter": fuel_cost_per_liter, 
@@ -343,7 +351,6 @@ if st.session_state.optimization_result:
     routes = result["route_results"]
     num_depots = data["num_depots"]
 
-    # Menghitung estimasi baseline (dari depot terdekat)
     total_unoptimized_meters = 0
     matrix = data["distance_matrix"]
     for i in range(num_depots, len(data["address_list"])):
