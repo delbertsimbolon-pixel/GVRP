@@ -149,35 +149,36 @@ num_vehicles = st.sidebar.number_input("Number of Vehicles", 1, 15, 2)
 vehicle_capacity = st.sidebar.number_input("Vehicle Max Capacity (kg)", 1, 50000, 1000, step=100)
 
 st.sidebar.header("🌱 GVRP Emission Factors")
-fuel_type = st.sidebar.selectbox(
-    "Fuel Type", 
-    ["Diesel (Solar)", "Gasoline (Bensin)"],
-    help="Diesel menghasilkan emisi karbon lebih padat per liternya dibandingkan bensin."
+vehicle_type = st.sidebar.selectbox(
+    "Vehicle Type & Fuel", 
+    ["Light Truck (Diesel)", "Pickup/Van (Gasoline)"],
+    help="Pemilihan jenis kendaraan otomatis menentukan standar konsumsi BBM dan konstanta emisi karbon."
 )
 
-fuel_co2_per_liter = 2.68 if fuel_type == "Diesel (Solar)" else 2.31
-
-st.sidebar.markdown("**Fuel Economy (km/L)**")
-fe_empty = st.sidebar.number_input("Empty Vehicle (km/L)", 1.0, 50.0, 10.0, step=0.5, help="Konsumsi BBM saat kendaraan tidak membawa muatan.")
-fe_full = st.sidebar.number_input("Fully Loaded Vehicle (km/L)", 1.0, 50.0, 7.0, step=0.5, help="Konsumsi BBM saat kendaraan membawa muatan maksimal.")
-
-if fe_full > fe_empty:
-    st.sidebar.warning("⚠️ Kendaraan bermuatan penuh biasanya lebih boros (angka km/L lebih kecil) daripada saat kosong.")
+if vehicle_type == "Light Truck (Diesel)":
+    fuel_co2_per_liter = 2.68
+    fe_empty = 10.0  
+    fe_full = 7.0    
+else:
+    fuel_co2_per_liter = 2.31
+    fe_empty = 12.0  
+    fe_full = 9.0    
 
 emission_empty = fuel_co2_per_liter / fe_empty if fe_empty > 0 else 0
 emission_full = fuel_co2_per_liter / fe_full if fe_full > 0 else 0
 
 st.sidebar.info(
-    f"💡 **Calculated Emissions:**\n"
-    f"- Empty: {emission_empty:.3f} kg CO2/km\n"
-    f"- Full: {emission_full:.3f} kg CO2/km"
+    f"💡 **Automated Emission Baseline:**\n"
+    f"- Empty: **{emission_empty:.3f} kg CO2/km**\n"
+    f"- Full Payload: **{emission_full:.3f} kg CO2/km**\n\n"
+    f"*(Calculated internally based on standard {vehicle_type} fuel economy)*"
 )
 
 st.sidebar.header("📦 Product Specifications")
 weight_per_unit = st.sidebar.number_input(
     "Average Weight per Unit/Package (kg)", 
     0.1, 1000.0, 5.0, step=0.1, 
-    help="Berat rata-rata untuk 1 unit barang. Ini akan dikalikan dengan demand tiap lokasi untuk mendapatkan total beban."
+    help="Berat rata-rata 1 unit barang. Sistem akan mengalikan nilai ini dengan demand untuk menghitung fluktuasi emisi."
 )
 
 # -------------------------------
@@ -312,7 +313,6 @@ if st.button("🚀 Run Route Optimization"):
     if scenario == "Peak distribution day":
         multiplier = 1.25
 
-    # KALKULASI BARU: Konversi Unit menjadi Kilogram
     final_demands = [
         math.ceil(loc["demand"] * multiplier * weight_per_unit) if idx != 0 else 0 
         for idx, loc in enumerate(sorted_locations)
@@ -465,7 +465,7 @@ st.markdown(
     <div style='text-align: center; color: #888888; font-size: 0.85rem; line-height: 1.6; padding: 10px 0;'>
         Property of Elementary Industrial Laboratory of industrial engineering<br>
         <span style='font-size: 0.8rem; color: #aaaaaa;'>
-            Made by: Daniel Delbert Ardielry, Primadhani Syahputera,
+            Made by: Daniel Delbert Ardielry, Zufar Fathan Hasdiono, Maulida Boru Butarbutar, Natanael Bayu Anggara
         </span>
     </div>
     """, 
