@@ -1,5 +1,14 @@
-# Di dalam fungsi def solve_gvrp(data):
-# ... (Kode inisialisasi model dari OR-Tools tetap sama hingga masuk ke dalam loop ekstraksi rute) ...
+# ... (Bagian atas solver.py dari inisialisasi sampai routing.SolveWithParameters tetap sama) ...
+
+    if solution is None:
+        return None
+
+    route_results = []
+    stop_results = []
+    total_distance = 0
+    latest_actual_arrival = 0
+    active_vehicles = 0
+    display_vehicle_id = 0
 
     for vehicle_id in range(data["num_vehicles"]):
         index = routing.Start(vehicle_id)
@@ -7,16 +16,16 @@
         route_distance = 0
         route_load = 0
         
-        # 1. Lakukan pre-looping untuk mendapatkan total beban awal (sebelum berangkat dari depot)
+        # 1. Lakukan pre-looping untuk mendapatkan total beban awal di depot
         temp_index = index
         while not routing.IsEnd(temp_index):
             node_idx = manager.IndexToNode(temp_index)
             route_load += int(data["demands"][node_idx])
             temp_index = solution.Value(routing.NextVar(temp_index))
 
-        current_vehicle_load = route_load  # Beban maksimal saat berangkat
+        current_vehicle_load = route_load  
         max_capacity = data["vehicle_capacities"][vehicle_id]
-        route_co2_emission = 0.0 # Akumulasi emisi rute ini
+        route_co2_emission = 0.0 
 
         route_nodes = []
         route_schedule = []
@@ -27,7 +36,7 @@
             node_index = manager.IndexToNode(index)
             arrival_time = solution.Min(time_dimension.CumulVar(index))
             
-            # Kurangi beban kendaraan saat barang diturunkan di titik ini
+            # Kurangi beban kendaraan saat barang diturunkan
             demand_at_node = int(data["demands"][node_index])
             current_vehicle_load -= demand_at_node 
 
@@ -40,50 +49,98 @@
             route_schedule.append({
                 "Location": data["address_list"][node_index],
                 "Time": f"{absolute_arrival // 60:02d}:{absolute_arrival % 60:02d}",
+                "Arrival_Minutes": arrival_time,
+                "Deadline_Minutes": absolute_deadline,
                 "Demand": demand_at_node,
-                "Current Load": current_vehicle_load, # Menyimpan histori beban
+                "Current Load": current_vehicle_load, 
                 "Latitude": data["raw_coords"][node_index][0],
                 "Longitude": data["raw_coords"][node_index][1],
                 "Stop Type": "Depot" if node_index == depot else "Delivery"
             })
 
-            # ... (Simpan status keterlambatan jika perlu, seperti kode sebelumnya) ...
+            if node_index != depot:
+                latest_actual_arrival = max(latest_actual_arrival, arrival_time)
+                latest_allowed_relative = relative_time_windows[node_index][1]
+                lateness = max(0, arrival_time - latest_allowed_relative)
+
+                temporary_stop_results.append({
+                    "Location": data["address_list"][node_index],
+                    "Arrival Time": f"{absolute_arrival // 60:02d}:{absolute_arrival % 60:02d}",
+                    "Deadline": f"{absolute_deadline // 60:02d}:{absolute_deadline % 60:02d}",
+                    "Demand": demand_at_node,
+                    "On-Time Status": "On time" if lateness == 0 else "Late",
+                    "Lateness (mins)": lateness
+                })
 
             previous_index = index
             index = solution.Value(routing.NextVar(index))
 
-            # 2. Kalkulasi Emisi Dinamis per Segmen Jalan
+            # 2. Kalkulasi Emisi Dinamis per Segmen Jalan menggunakan CMEM sederhana
             segment_distance_m = routing.GetArcCostForVehicle(previous_index, index, vehicle_id)
             segment_distance_km = segment_distance_m / 1000.0
             route_distance += segment_distance_m
             
-            # Aplikasi Model Matematika GVRP untuk emisi
             load_ratio = current_vehicle_load / max_capacity if max_capacity > 0 else 0
             emission_rate = data["emission_empty"] + (load_ratio * (data["emission_full"] - data["emission_empty"]))
             segment_emission = segment_distance_km * emission_rate
             
             route_co2_emission += segment_emission
 
-        # ... (Kode penanganan end_node dan depot kembali tetap sama) ...
+        end_node = manager.IndexToNode(index)
+        end_time = solution.Min(time_dimension.CumulVar(index))
+        absolute_end_time = end_time + depot_start
+
+        route_nodes.append(data["address_list"][end_node])
+        route_node_indices.append(end_node)
+
+        route_schedule.append({
+            "Location": data["address_list"][end_node],
+            "Time": f"{absolute_end_time // 60:02d}:{absolute_end_time % 60:02d}",
+            "Arrival_Minutes": end_time,
+            "Deadline_Minutes": data["time_windows"][end_node][1],
+            "Demand": int(data["demands"][end_node]),
+            "Current Load": 0,
+            "Latitude": data["raw_coords"][end_node][0],
+            "Longitude": data["raw_coords"][end_node][1],
+            "Stop Type": "Return to Depot"
+        })
 
         if route_load > 0:
             active_vehicles += 1
             display_vehicle_id += 1
             total_distance += route_distance
-            
+
+            for stop in temporary_stop_results:
+                stop["Vehicle"] = display_vehicle_id
+                stop_results.append(stop)
+                
             distance_km = route_distance / 1000
             fuel_cost = distance_km * data["fuel_cost_per_km"]
-            total_cost = fuel_cost + data["driver_cost_per_vehicle"]
+            driver_cost = data["driver_cost_per_vehicle"]
+            total_cost = fuel_cost + driver_cost
             
             route_results.append({
+                "Fuel Cost": round(fuel_cost, 2),
+                "Driver Cost": round(driver_cost, 2),
+                "Total Cost": round(total_cost, 2),
                 "Vehicle": display_vehicle_id,
+                "Original Vehicle ID": vehicle_id + 1,
+                "Route": " -> ".join(route_nodes),
                 "Distance (km)": round(distance_km, 2),
                 "Delivered Packages": route_load,
-                "Utilization (%)": round(route_load / max_capacity * 100, 2),
-                "Total Cost": round(total_cost, 2),
-                "CO2 Emissions (kg)": round(route_co2_emission, 3), # Menggunakan hasil kalkulasi dinamis
+                "Utilization (%)": round((route_load / max_capacity) * 100, 2),
+                "CO2 Emissions (kg)": round(route_co2_emission, 3), 
+                "Exposure Time (mins)": end_time,
+                "Return Time": f"{absolute_end_time // 60:02d}:{absolute_end_time % 60:02d}",
                 "Schedule": route_schedule,
+                "Node Indices": route_node_indices,
                 "Coordinates": [data["raw_coords"][i] for i in route_node_indices]
             })
-            
-    # Return hasil
+
+    return {
+        "route_results": route_results,
+        "stop_results": stop_results,
+        "optimized_distance_km": total_distance / 1000,
+        "latest_actual_arrival": latest_actual_arrival,
+        "active_vehicles": active_vehicles
+    }
