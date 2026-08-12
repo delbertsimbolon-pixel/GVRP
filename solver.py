@@ -22,13 +22,36 @@ def solve_gvrp(data):
 
     routing = pywrapcp.RoutingModel(manager)
 
-    def distance_callback(from_index, to_index):
+    # =====================================================================
+    # GREEN HEURISTIC: DEMAND-GRAVITY COST MATRIX
+    # Mengubah paradigma pencarian dari 'Shortest Path' ke 'Lowest Emission'
+    # =====================================================================
+    cost_matrix = []
+    max_cap = max(data["vehicle_capacities"]) if data["vehicle_capacities"] else 1
+    
+    for i in range(len(data["distance_matrix"])):
+        row = []
+        for j in range(len(data["distance_matrix"])):
+            dist = data["distance_matrix"][i][j]
+            
+            if i == depot and j != depot:
+                # Diskon fiktif untuk node dengan muatan terberat (prioritas turunkan barang)
+                demand_ratio = data["demands"][j] / max_cap
+                gravity_discount = 1.0 - (0.45 * demand_ratio)
+                row.append(int(dist * gravity_discount))
+            else:
+                row.append(dist)
+                
+        cost_matrix.append(row)
+
+    def green_cost_callback(from_index, to_index):
         from_node = manager.IndexToNode(from_index)
         to_node = manager.IndexToNode(to_index)
-        return int(data["distance_matrix"][from_node][to_node])
+        return cost_matrix[from_node][to_node]
 
-    distance_callback_index = routing.RegisterTransitCallback(distance_callback)
-    routing.SetArcCostEvaluatorOfAllVehicles(distance_callback_index)
+    cost_callback_index = routing.RegisterTransitCallback(green_cost_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(cost_callback_index)
+    # =====================================================================
 
     def demand_callback(from_index):
         from_node = manager.IndexToNode(from_index)
@@ -123,7 +146,7 @@ def solve_gvrp(data):
             node_index = manager.IndexToNode(index)
             arrival_time = solution.Min(time_dimension.CumulVar(index))
             
-            # Kurangi beban kendaraan saat barang diturunkan
+            # Kurangi beban kendaraan saat barang diturunkan di titik ini
             demand_at_node = int(data["demands"][node_index])
             current_vehicle_load -= demand_at_node 
 
@@ -162,8 +185,12 @@ def solve_gvrp(data):
             previous_index = index
             index = solution.Value(routing.NextVar(index))
 
-            # 2. Kalkulasi Emisi Dinamis per Segmen Jalan menggunakan CMEM sederhana
-            segment_distance_m = routing.GetArcCostForVehicle(previous_index, index, vehicle_id)
+            # 2. Kalkulasi Metrik Asli per Segmen Jalan 
+            # Penting: Menggunakan data asli agar output jarak tidak rusak oleh diskon heuristik
+            prev_node = manager.IndexToNode(previous_index)
+            curr_node = manager.IndexToNode(index)
+            
+            segment_distance_m = data["distance_matrix"][prev_node][curr_node]
             segment_distance_km = segment_distance_m / 1000.0
             route_distance += segment_distance_m
             
@@ -214,7 +241,7 @@ def solve_gvrp(data):
                 "Original Vehicle ID": vehicle_id + 1,
                 "Route": " -> ".join(route_nodes),
                 "Distance (km)": round(distance_km, 2),
-                "Delivered Packages": route_load,
+                "Total Payload (kg)": route_load,
                 "Utilization (%)": round((route_load / max_capacity) * 100, 2),
                 "CO2 Emissions (kg)": round(route_co2_emission, 3), 
                 "Exposure Time (mins)": end_time,
