@@ -35,7 +35,6 @@ def solve_gvrp(data):
             dist = data["distance_matrix"][i][j]
             
             if i == depot and j != depot:
-                # Diskon fiktif untuk node dengan muatan terberat (prioritas turunkan barang)
                 demand_ratio = data["demands"][j] / max_cap
                 gravity_discount = 1.0 - (0.45 * demand_ratio)
                 row.append(int(dist * gravity_discount))
@@ -126,7 +125,6 @@ def solve_gvrp(data):
         route_distance = 0
         route_load = 0
         
-        # 1. Lakukan pre-looping untuk mendapatkan total beban awal di depot
         temp_index = index
         while not routing.IsEnd(temp_index):
             node_idx = manager.IndexToNode(temp_index)
@@ -146,7 +144,6 @@ def solve_gvrp(data):
             node_index = manager.IndexToNode(index)
             arrival_time = solution.Min(time_dimension.CumulVar(index))
             
-            # Kurangi beban kendaraan saat barang diturunkan di titik ini
             demand_at_node = int(data["demands"][node_index])
             current_vehicle_load -= demand_at_node 
 
@@ -185,8 +182,6 @@ def solve_gvrp(data):
             previous_index = index
             index = solution.Value(routing.NextVar(index))
 
-            # 2. Kalkulasi Metrik Asli per Segmen Jalan 
-            # Penting: Menggunakan data asli agar output jarak tidak rusak oleh diskon heuristik
             prev_node = manager.IndexToNode(previous_index)
             curr_node = manager.IndexToNode(index)
             
@@ -229,11 +224,15 @@ def solve_gvrp(data):
                 stop_results.append(stop)
                 
             distance_km = route_distance / 1000
-            fuel_cost = distance_km * data["fuel_cost_per_km"]
+            
+            # 3. Kalkulasi Bahan Bakar dalam Satuan Liter & Biaya Riil
+            route_fuel_liters = route_co2_emission / data["fuel_co2_per_liter"]
+            fuel_cost = route_fuel_liters * data["fuel_cost_per_liter"]
             driver_cost = data["driver_cost_per_vehicle"]
             total_cost = fuel_cost + driver_cost
             
             route_results.append({
+                "Fuel Consumed (L)": round(route_fuel_liters, 2),
                 "Fuel Cost": round(fuel_cost, 2),
                 "Driver Cost": round(driver_cost, 2),
                 "Total Cost": round(total_cost, 2),
