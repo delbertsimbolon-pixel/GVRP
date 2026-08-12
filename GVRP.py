@@ -7,7 +7,6 @@ import folium
 from folium.plugins import AntPath
 from streamlit_folium import st_folium
 
-# Pastikan file solver kamu bernama solver.py
 from solver import solve_gvrp
 
 # -------------------------------
@@ -18,9 +17,8 @@ if "optimization_result" not in st.session_state:
 if "optimization_data" not in st.session_state:
     st.session_state.optimization_data = None
 
-# Track the number of locations dynamically for manual entry
 if "num_locations" not in st.session_state:
-    st.session_state.num_locations = 2  # Starts with 2 locations
+    st.session_state.num_locations = 2 
 
 # --- PAGE CONFIG ---
 st.set_page_config(page_title="Distribution Route Optimization System", layout="wide", page_icon="🌱")
@@ -139,17 +137,23 @@ def parse_time_to_minutes(time_str):
 # -------------------------------
 # Sidebar inputs (Global parameters)
 # -------------------------------
-st.sidebar.header("🚚 Fleet & Emission Parameters")
-fuel_cost_per_km = st.sidebar.number_input("Fuel Cost per KM (Rp)", 0, 50000, 1500)
+st.sidebar.header("🚚 Fleet Parameters")
 driver_cost_per_vehicle = st.sidebar.number_input("Driver Cost per Vehicle (Rp)", 0, 500000, 100000)
 num_vehicles = st.sidebar.number_input("Number of Vehicles", 1, 15, 2)
 vehicle_capacity = st.sidebar.number_input("Vehicle Max Capacity (kg)", 1, 50000, 1000, step=100)
 
-st.sidebar.header("🌱 GVRP Emission Factors")
+st.sidebar.header("🌱 GVRP Fuel & Emission Factors")
 vehicle_type = st.sidebar.selectbox(
     "Vehicle Type & Fuel", 
     ["Light Truck (Diesel)", "Pickup/Van (Gasoline)"],
     help="Pemilihan jenis kendaraan otomatis menentukan standar konsumsi BBM dan konstanta emisi karbon."
+)
+
+# Input Biaya BBM per Liter yang jauh lebih realistis
+fuel_cost_per_liter = st.sidebar.number_input(
+    "Fuel Price per Liter (Rp)", 
+    0, 50000, 6800, step=100, 
+    help="Harga BBM per Liter (Misal: Biosolar Rp 6.800, Pertalite Rp 10.000)"
 )
 
 if vehicle_type == "Light Truck (Diesel)":
@@ -306,12 +310,12 @@ if st.button("🚀 Run Route Optimization"):
         loc for idx, loc in enumerate(user_locations) if idx != primary_depot_idx
     ]
 
-    # KALKULASI BARU: Hanya mengkonversi Unit menjadi Kilogram
     final_demands = [
         math.ceil(loc["demand"] * weight_per_unit) if idx != 0 else 0 
         for idx, loc in enumerate(sorted_locations)
     ]
 
+    # Menambahkan data liter harga BBM dan konstanta emisi ke dalam dictionary
     data = {
         "address_list": [loc["name"] for loc in sorted_locations],
         "raw_coords": [loc["coords"] for loc in sorted_locations],
@@ -322,7 +326,8 @@ if st.button("🚀 Run Route Optimization"):
         "depot_start": 0,              
         "time_windows": [loc["time_window"] for loc in sorted_locations], 
         "service_times": [0 if idx == 0 else 5 for idx in range(len(sorted_locations))], 
-        "fuel_cost_per_km": fuel_cost_per_km,
+        "fuel_cost_per_liter": fuel_cost_per_liter, 
+        "fuel_co2_per_liter": fuel_co2_per_liter,
         "driver_cost_per_vehicle": driver_cost_per_vehicle,
         "emission_empty": emission_empty,
         "emission_full": emission_full
@@ -394,7 +399,7 @@ if st.session_state.optimization_result:
     st.subheader("🚛 Vehicle Summary Table")
     
     for r in routes:
-        for col_name in ["Fuel Cost", "Driver Cost", "Total Cost", "CO2 Emissions (kg)"]:
+        for col_name in ["Fuel Consumed (L)", "Fuel Cost", "Driver Cost", "Total Cost", "CO2 Emissions (kg)"]:
             if col_name not in r:
                 r[col_name] = 0
                 
@@ -404,6 +409,7 @@ if st.session_state.optimization_result:
         "Total Payload (kg)",
         "Utilization (%)",
         "CO2 Emissions (kg)",
+        "Fuel Consumed (L)", 
         "Fuel Cost",
         "Driver Cost",
         "Total Cost",
