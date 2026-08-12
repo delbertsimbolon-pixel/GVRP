@@ -85,7 +85,7 @@ def solve_gvrp(data):
         index = manager.NodeToIndex(location_idx)
         time_dimension.CumulVar(index).SetRange(time_window[0], time_window[1])
 
-    # Batasan Jendela Waktu (Absolut) untuk kendaraan (mengikuti jam operasional Depot masing-masing)
+    # Batasan Jendela Waktu (Absolut) untuk kendaraan
     for vehicle_id in range(data["num_vehicles"]):
         start_index = routing.Start(vehicle_id)
         end_index = routing.End(vehicle_id)
@@ -220,6 +220,7 @@ def solve_gvrp(data):
                 
             distance_km = route_distance / 1000
             
+            # Kalkulasi Bahan Bakar dalam Satuan Liter & Biaya Riil
             route_fuel_liters = route_co2_emission / data["fuel_co2_per_liter"]
             fuel_cost = route_fuel_liters * data["fuel_cost_per_liter"]
             driver_cost = data["driver_cost_per_vehicle"]
