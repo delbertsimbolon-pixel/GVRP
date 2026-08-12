@@ -1,4 +1,91 @@
-# ... (Bagian atas solver.py dari inisialisasi sampai routing.SolveWithParameters tetap sama) ...
+from ortools.constraint_solver import routing_enums_pb2
+from ortools.constraint_solver import pywrapcp
+
+def solve_gvrp(data):
+    depot = data["depot"]
+    depot_start = data.get("depot_start", data["time_windows"][depot][0])
+
+    relative_time_windows = []
+    for start, end in data["time_windows"]:
+        relative_start = max(0, start - depot_start)
+        relative_end = max(0, end - depot_start)
+        relative_time_windows.append((relative_start, relative_end))
+
+    depot_end_relative = max(0, data["time_windows"][depot][1] - depot_start)
+    relative_time_windows[depot] = (0, depot_end_relative)
+
+    manager = pywrapcp.RoutingIndexManager(
+        len(data["distance_matrix"]),
+        data["num_vehicles"],
+        depot
+    )
+
+    routing = pywrapcp.RoutingModel(manager)
+
+    def distance_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        return int(data["distance_matrix"][from_node][to_node])
+
+    distance_callback_index = routing.RegisterTransitCallback(distance_callback)
+    routing.SetArcCostEvaluatorOfAllVehicles(distance_callback_index)
+
+    def demand_callback(from_index):
+        from_node = manager.IndexToNode(from_index)
+        return int(data["demands"][from_node])
+
+    demand_callback_index = routing.RegisterUnaryTransitCallback(demand_callback)
+
+    routing.AddDimensionWithVehicleCapacity(
+        demand_callback_index,
+        0,
+        data["vehicle_capacities"],
+        True,
+        "Capacity"
+    )
+
+    def time_callback(from_index, to_index):
+        from_node = manager.IndexToNode(from_index)
+        to_node = manager.IndexToNode(to_index)
+        travel_time = int(data["time_matrix"][from_node][to_node])
+        service_time = int(data["service_times"][from_node])
+        return travel_time + service_time
+
+    time_callback_index = routing.RegisterTransitCallback(time_callback)
+    max_time_horizon = max(end for _, end in relative_time_windows)
+
+    routing.AddDimension(
+        time_callback_index,
+        120,                
+        max_time_horizon,   
+        False,
+        "Time"
+    )
+
+    time_dimension = routing.GetDimensionOrDie("Time")
+
+    for location_idx, time_window in enumerate(relative_time_windows):
+        index = manager.NodeToIndex(location_idx)
+        time_dimension.CumulVar(index).SetRange(time_window[0], time_window[1])
+
+    depot_time_window = relative_time_windows[depot]
+
+    for vehicle_id in range(data["num_vehicles"]):
+        start_index = routing.Start(vehicle_id)
+        end_index = routing.End(vehicle_id)
+
+        time_dimension.CumulVar(start_index).SetRange(depot_time_window[0], depot_time_window[1])
+        time_dimension.CumulVar(end_index).SetRange(depot_time_window[0], depot_time_window[1])
+
+        routing.AddVariableMinimizedByFinalizer(time_dimension.CumulVar(start_index))
+        routing.AddVariableMinimizedByFinalizer(time_dimension.CumulVar(end_index))
+
+    search_parameters = pywrapcp.DefaultRoutingSearchParameters()
+    search_parameters.first_solution_strategy = routing_enums_pb2.FirstSolutionStrategy.PATH_CHEAPEST_ARC
+    search_parameters.local_search_metaheuristic = routing_enums_pb2.LocalSearchMetaheuristic.GUIDED_LOCAL_SEARCH
+    search_parameters.time_limit.seconds = 10
+
+    solution = routing.SolveWithParameters(search_parameters)
 
     if solution is None:
         return None
