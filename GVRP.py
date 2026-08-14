@@ -236,7 +236,7 @@ else:
     template_df = pd.DataFrame(template_data)
     template_csv = template_df.to_csv(index=False).encode("utf-8")
         
-    st.sidebar.download_button("📥 Download Template Table", data=template_csv, file_name="mdgvrp_template.csv", mime="text/csv")
+    st.sidebar.download_button("📥 Download Template Table", data=template_csv, file_name="gvrp_template.csv", mime="text/csv")
     uploaded_file = st.sidebar.file_uploader("Upload Completed File", type=["xlsx", "xls", "csv"])
     
     if uploaded_file is not None:
