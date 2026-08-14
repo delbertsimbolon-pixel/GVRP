@@ -25,7 +25,7 @@ if "num_locations" not in st.session_state:
 st.set_page_config(page_title="Distribution Route Optimization System", layout="wide", page_icon="🌱")
 
 # --- HEADER ---
-st.title("🌱 Multi-Depot Green Route Optimization (MDGVRP)")
+st.title("🌱 Green Route Optimization (GVRP)")
 
 # -------------------------------
 # OSRM helpers
