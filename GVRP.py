@@ -277,7 +277,7 @@ else:
 # -------------------------------
 # Run solver
 # -------------------------------
-if st.button("🚀 Run MDGVRP Optimization"):
+if st.button("🚀 Run GVRP Optimization"):
     if not user_locations:
         st.error("No location configurations found.")
         st.stop()
